@@ -1,0 +1,1504 @@
+#include <SDL2/SDL.h>
+#include <stdlib.h>
+
+/* =========================================
+   FUTURISTIC FULL-SCREEN TIC TAC TOE
+   ========================================= */
+
+/* Board variables */
+int BOARD_X;
+int BOARD_Y;
+int CELL;
+int BOARD_SIZE;
+
+/* Game */
+int board[3][3] = {0};
+
+int currentPlayer = 1;
+int gameOver = 0;
+int winner = 0;
+
+/* Winning line */
+int winR1 = -1;
+int winC1 = -1;
+int winR2 = -1;
+int winC2 = -1;
+
+/* Animation */
+Uint32 pieceAnimationStart = 0;
+int animationRow = -1;
+int animationCol = -1;
+int pieceAnimating = 0;
+
+Uint32 winAnimationStart = 0;
+int winAnimating = 0;
+
+#define ANIMATION_TIME 220
+#define WIN_LINE_TIME 600
+
+/* =========================================
+   FIXED NEON COLORS
+   ========================================= */
+
+/* X = Cyan */
+#define X_R 0
+#define X_G 220
+#define X_B 255
+
+/* O = Purple */
+#define O_R 180
+#define O_G 50
+#define O_B 255
+
+/* Grid = Green */
+#define GRID_R 0
+#define GRID_G 255
+#define GRID_B 100
+
+/* Text = White */
+#define TEXT_R 255
+#define TEXT_G 255
+#define TEXT_B 255
+
+
+/* =========================================
+   AUDIO
+   ========================================= */
+
+SDL_AudioDeviceID audioDevice = 0;
+SDL_AudioSpec audioSpec;
+
+
+/* =========================================
+   SOUND
+   ========================================= */
+
+void playTone(
+    int frequency,
+    int duration,
+    int volume)
+{
+    if (audioDevice == 0)
+        return;
+
+    int samples =
+        audioSpec.freq * duration / 1000;
+
+    Sint16 *buffer =
+        (Sint16 *)malloc(
+            samples * sizeof(Sint16)
+        );
+
+    if (buffer == NULL)
+        return;
+
+    int phase = 0;
+    int i;
+
+    for (i = 0; i < samples; i++)
+    {
+        phase += frequency;
+
+        if (phase >= audioSpec.freq)
+            phase -= audioSpec.freq;
+
+        int amplitude = volume;
+
+        if (i < samples / 10)
+        {
+            amplitude =
+                volume * i / (samples / 10);
+        }
+
+        if (i > samples * 9 / 10)
+        {
+            amplitude =
+                volume *
+                (samples - i) /
+                (samples / 10);
+        }
+
+        if (phase < audioSpec.freq / 2)
+            buffer[i] = amplitude;
+        else
+            buffer[i] = -amplitude;
+    }
+
+    SDL_QueueAudio(
+        audioDevice,
+        buffer,
+        samples * sizeof(Sint16)
+    );
+
+    free(buffer);
+}
+
+
+/* =========================================
+   WINNER
+   ========================================= */
+
+int checkWinner()
+{
+    int i;
+
+    winR1 = -1;
+    winC1 = -1;
+    winR2 = -1;
+    winC2 = -1;
+
+    /* Rows */
+    for (i = 0; i < 3; i++)
+    {
+        if (board[i][0] != 0 &&
+            board[i][0] == board[i][1] &&
+            board[i][1] == board[i][2])
+        {
+            winR1 = i;
+            winC1 = 0;
+
+            winR2 = i;
+            winC2 = 2;
+
+            return board[i][0];
+        }
+    }
+
+    /* Columns */
+    for (i = 0; i < 3; i++)
+    {
+        if (board[0][i] != 0 &&
+            board[0][i] == board[1][i] &&
+            board[1][i] == board[2][i])
+        {
+            winR1 = 0;
+            winC1 = i;
+
+            winR2 = 2;
+            winC2 = i;
+
+            return board[0][i];
+        }
+    }
+
+    /* Diagonal */
+    if (board[0][0] != 0 &&
+        board[0][0] == board[1][1] &&
+        board[1][1] == board[2][2])
+    {
+        winR1 = 0;
+        winC1 = 0;
+
+        winR2 = 2;
+        winC2 = 2;
+
+        return board[0][0];
+    }
+
+    /* Other diagonal */
+    if (board[0][2] != 0 &&
+        board[0][2] == board[1][1] &&
+        board[1][1] == board[2][0])
+    {
+        winR1 = 0;
+        winC1 = 2;
+
+        winR2 = 2;
+        winC2 = 0;
+
+        return board[0][2];
+    }
+
+    return 0;
+}
+
+
+/* =========================================
+   BOARD FULL
+   ========================================= */
+
+int boardFull()
+{
+    int r, c;
+
+    for (r = 0; r < 3; r++)
+    {
+        for (c = 0; c < 3; c++)
+        {
+            if (board[r][c] == 0)
+                return 0;
+        }
+    }
+
+    return 1;
+}
+
+
+/* =========================================
+   RESET
+   ========================================= */
+
+void resetGame()
+{
+    int r, c;
+
+    for (r = 0; r < 3; r++)
+    {
+        for (c = 0; c < 3; c++)
+        {
+            board[r][c] = 0;
+        }
+    }
+
+    currentPlayer = 1;
+    gameOver = 0;
+    winner = 0;
+
+    winR1 = -1;
+    winC1 = -1;
+    winR2 = -1;
+    winC2 = -1;
+
+    pieceAnimating = 0;
+    winAnimating = 0;
+}
+
+
+/* =========================================
+   DRAW CHARACTER
+   ========================================= */
+
+void drawChar(
+    SDL_Renderer *renderer,
+    char ch,
+    int x,
+    int y,
+    int size)
+{
+    const char *p[7];
+
+    int r, c;
+
+    for (r = 0; r < 7; r++)
+        p[r] = "     ";
+
+    /* X */
+    if (ch == 'X')
+    {
+        p[0] = "10001";
+        p[1] = "01010";
+        p[2] = "00100";
+        p[3] = "00100";
+        p[4] = "00100";
+        p[5] = "01010";
+        p[6] = "10001";
+    }
+
+    /* O */
+    else if (ch == 'O')
+    {
+        p[0] = "01110";
+        p[1] = "10001";
+        p[2] = "10001";
+        p[3] = "10001";
+        p[4] = "10001";
+        p[5] = "10001";
+        p[6] = "01110";
+    }
+
+    /* W */
+    else if (ch == 'W')
+    {
+        p[0] = "10001";
+        p[1] = "10001";
+        p[2] = "10001";
+        p[3] = "10101";
+        p[4] = "10101";
+        p[5] = "11011";
+        p[6] = "10001";
+    }
+
+    /* I */
+    else if (ch == 'I')
+    {
+        p[0] = "11111";
+        p[1] = "00100";
+        p[2] = "00100";
+        p[3] = "00100";
+        p[4] = "00100";
+        p[5] = "00100";
+        p[6] = "11111";
+    }
+
+    /* N */
+    else if (ch == 'N')
+    {
+        p[0] = "10001";
+        p[1] = "11001";
+        p[2] = "10101";
+        p[3] = "10011";
+        p[4] = "10001";
+        p[5] = "10001";
+        p[6] = "10001";
+    }
+
+    /* S */
+    else if (ch == 'S')
+    {
+        p[0] = "01111";
+        p[1] = "10000";
+        p[2] = "10000";
+        p[3] = "01110";
+        p[4] = "00001";
+        p[5] = "00001";
+        p[6] = "11110";
+    }
+
+    /* D */
+    else if (ch == 'D')
+    {
+        p[0] = "11110";
+        p[1] = "10001";
+        p[2] = "10001";
+        p[3] = "10001";
+        p[4] = "10001";
+        p[5] = "10001";
+        p[6] = "11110";
+    }
+
+    /* R */
+    else if (ch == 'R')
+    {
+        p[0] = "11110";
+        p[1] = "10001";
+        p[2] = "10001";
+        p[3] = "11110";
+        p[4] = "10100";
+        p[5] = "10010";
+        p[6] = "10001";
+    }
+
+    /* E */
+    else if (ch == 'E')
+    {
+        p[0] = "11111";
+        p[1] = "10000";
+        p[2] = "10000";
+        p[3] = "11110";
+        p[4] = "10000";
+        p[5] = "10000";
+        p[6] = "11111";
+    }
+
+    /* T */
+    else if (ch == 'T')
+    {
+        p[0] = "11111";
+        p[1] = "00100";
+        p[2] = "00100";
+        p[3] = "00100";
+        p[4] = "00100";
+        p[5] = "00100";
+        p[6] = "00100";
+    }
+
+    /* A */
+    else if (ch == 'A')
+    {
+        p[0] = "01110";
+        p[1] = "10001";
+        p[2] = "10001";
+        p[3] = "11111";
+        p[4] = "10001";
+        p[5] = "10001";
+        p[6] = "10001";
+    }
+
+    /* P */
+    else if (ch == 'P')
+    {
+        p[0] = "11110";
+        p[1] = "10001";
+        p[2] = "10001";
+        p[3] = "11110";
+        p[4] = "10000";
+        p[5] = "10000";
+        p[6] = "10000";
+    }
+
+    /* L */
+    else if (ch == 'L')
+    {
+        p[0] = "10000";
+        p[1] = "10000";
+        p[2] = "10000";
+        p[3] = "10000";
+        p[4] = "10000";
+        p[5] = "10000";
+        p[6] = "11111";
+    }
+
+    for (r = 0; r < 7; r++)
+    {
+        for (c = 0; c < 5; c++)
+        {
+            if (p[r][c] == '1')
+            {
+                SDL_Rect block =
+                {
+                    x + c * size,
+                    y + r * size,
+                    size,
+                    size
+                };
+
+                SDL_RenderFillRect(
+                    renderer,
+                    &block
+                );
+            }
+        }
+    }
+}
+
+
+/* =========================================
+   DRAW TEXT
+   ========================================= */
+
+void drawText(
+    SDL_Renderer *renderer,
+    const char *text,
+    int x,
+    int y,
+    int size)
+{
+    int i = 0;
+
+    while (text[i] != '\0')
+    {
+        drawChar(
+            renderer,
+            text[i],
+            x + i * 6 * size,
+            y,
+            size
+        );
+
+        i++;
+    }
+}
+
+
+/* =========================================
+   NEON LINE
+   ========================================= */
+
+void neonLine(
+    SDL_Renderer *renderer,
+    int x1,
+    int y1,
+    int x2,
+    int y2,
+    int r,
+    int g,
+    int b)
+{
+    /* Glow */
+    SDL_SetRenderDrawColor(
+        renderer,
+        r / 4,
+        g / 4,
+        b / 4,
+        255
+    );
+
+    SDL_RenderDrawLine(
+        renderer,
+        x1 - 3,
+        y1 - 3,
+        x2 - 3,
+        y2 - 3
+    );
+
+    SDL_RenderDrawLine(
+        renderer,
+        x1 + 3,
+        y1 + 3,
+        x2 + 3,
+        y2 + 3
+    );
+
+    /* Main line */
+    SDL_SetRenderDrawColor(
+        renderer,
+        r,
+        g,
+        b,
+        255
+    );
+
+    SDL_RenderDrawLine(
+        renderer,
+        x1,
+        y1,
+        x2,
+        y2
+    );
+}
+
+
+/* =========================================
+   NEON X
+   ========================================= */
+
+void drawNeonX(
+    SDL_Renderer *renderer,
+    int cx,
+    int cy,
+    float progress)
+{
+    int length =
+        (int)(CELL * 0.29f * progress);
+
+    neonLine(
+        renderer,
+        cx - length,
+        cy - length,
+        cx + length,
+        cy + length,
+        X_R,
+        X_G,
+        X_B
+    );
+
+    neonLine(
+        renderer,
+        cx + length,
+        cy - length,
+        cx - length,
+        cy + length,
+        X_R,
+        X_G,
+        X_B
+    );
+}
+
+
+/* =========================================
+   NEON O
+   ========================================= */
+
+void drawNeonO(
+    SDL_Renderer *renderer,
+    int cx,
+    int cy,
+    float progress)
+{
+    int radius =
+        (int)(CELL * 0.29f * progress);
+
+    int px[] =
+    {
+        35,34,31,25,18,9,0,
+        -9,-18,-25,-31,-34,-35,
+        -34,-31,-25,-18,-9,0,
+        9,18,25,31,34,35
+    };
+
+    int py[] =
+    {
+        0,9,18,25,31,34,35,
+        34,31,25,18,9,0,
+        -9,-18,-25,-31,-34,-35,
+        -34,-31,-25,-18,-9,0
+    };
+
+    SDL_Point circle[25];
+
+    int i;
+
+    for (i = 0; i < 25; i++)
+    {
+        circle[i].x =
+            cx + px[i] * radius / 35;
+
+        circle[i].y =
+            cy + py[i] * radius / 35;
+    }
+
+    /* Glow */
+    SDL_SetRenderDrawColor(
+        renderer,
+        O_R / 4,
+        O_G / 4,
+        O_B / 4,
+        255
+    );
+
+    SDL_RenderDrawLines(
+        renderer,
+        circle,
+        25
+    );
+
+    /* Main */
+    SDL_SetRenderDrawColor(
+        renderer,
+        O_R,
+        O_G,
+        O_B,
+        255
+    );
+
+    SDL_RenderDrawLines(
+        renderer,
+        circle,
+        25
+    );
+}
+
+
+/* =========================================
+   MAIN
+   ========================================= */
+
+int main()
+{
+    /* SDL */
+    if (SDL_Init(
+            SDL_INIT_VIDEO |
+            SDL_INIT_AUDIO) != 0)
+    {
+        return 1;
+    }
+
+    /* Touch only */
+    SDL_SetHint(
+        SDL_HINT_TOUCH_MOUSE_EVENTS,
+        "0"
+    );
+
+
+    /* =====================================
+       FULL-SCREEN WINDOW
+       ===================================== */
+
+    SDL_Window *window =
+        SDL_CreateWindow(
+            "NEON TIC TAC TOE",
+            SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED,
+            720,
+            1500,
+            SDL_WINDOW_FULLSCREEN_DESKTOP
+        );
+
+    if (window == NULL)
+    {
+        SDL_Quit();
+        return 1;
+    }
+
+
+    /* Renderer */
+    SDL_Renderer *renderer =
+        SDL_CreateRenderer(
+            window,
+            -1,
+            SDL_RENDERER_ACCELERATED
+        );
+
+    if (renderer == NULL)
+    {
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+
+    /* =====================================
+       GET PHONE SCREEN SIZE
+       ===================================== */
+
+    int screenW;
+    int screenH;
+
+    SDL_GetWindowSize(
+        window,
+        &screenW,
+        &screenH
+    );
+
+
+    /* =====================================
+       AUTOMATIC BOARD SIZE
+       ===================================== */
+
+    /*
+       Board uses about 86% of
+       the phone width.
+    */
+
+    BOARD_SIZE =
+        (int)(screenW * 0.86f);
+
+    CELL =
+        BOARD_SIZE / 3;
+
+    BOARD_SIZE =
+        CELL * 3;
+
+    BOARD_X =
+        (screenW - BOARD_SIZE) / 2;
+
+
+    /*
+       Position board in upper-middle
+       part of screen.
+    */
+
+    BOARD_Y =
+        (int)(screenH * 0.24f);
+
+
+    /* =====================================
+       AUDIO
+       ===================================== */
+
+    SDL_AudioSpec wanted;
+
+    SDL_zero(wanted);
+
+    wanted.freq = 44100;
+    wanted.format = AUDIO_S16SYS;
+    wanted.channels = 1;
+    wanted.samples = 4096;
+
+    audioDevice =
+        SDL_OpenAudioDevice(
+            NULL,
+            0,
+            &wanted,
+            &audioSpec,
+            0
+        );
+
+    if (audioDevice != 0)
+    {
+        SDL_PauseAudioDevice(
+            audioDevice,
+            0
+        );
+    }
+
+
+    int running = 1;
+
+
+    /* =====================================
+       GAME LOOP
+       ===================================== */
+
+    while (running)
+    {
+        SDL_Event event;
+
+        Uint32 now =
+            SDL_GetTicks();
+
+
+        /* =================================
+           EVENTS
+           ================================= */
+
+        while (SDL_PollEvent(&event))
+        {
+            if (event.type == SDL_QUIT)
+            {
+                running = 0;
+            }
+
+
+            /* TOUCH */
+            if (event.type == SDL_FINGERDOWN)
+            {
+                int x =
+                    (int)(
+                        event.tfinger.x *
+                        screenW
+                    );
+
+                int y =
+                    (int)(
+                        event.tfinger.y *
+                        screenH
+                    );
+
+
+                /* =================================
+                   RESTART BUTTON
+                   ================================= */
+
+                int buttonX =
+                    screenW / 2 - CELL;
+
+                int buttonY =
+                    BOARD_Y +
+                    BOARD_SIZE +
+                    150;
+
+                int buttonW =
+                    CELL * 2;
+
+                int buttonH =
+                    80;
+
+
+                if (x >= buttonX &&
+                    x <= buttonX + buttonW &&
+                    y >= buttonY &&
+                    y <= buttonY + buttonH)
+                {
+                    resetGame();
+
+                    playTone(
+                        500,
+                        100,
+                        5000
+                    );
+                }
+
+
+                /* =================================
+                   BOARD
+                   ================================= */
+
+                else if (!gameOver &&
+                         !pieceAnimating &&
+                         x >= BOARD_X &&
+                         x < BOARD_X + BOARD_SIZE &&
+                         y >= BOARD_Y &&
+                         y < BOARD_Y + BOARD_SIZE)
+                {
+                    int col =
+                        (x - BOARD_X) / CELL;
+
+                    int row =
+                        (y - BOARD_Y) / CELL;
+
+
+                    if (board[row][col] == 0)
+                    {
+                        board[row][col] =
+                            currentPlayer;
+
+
+                        animationRow = row;
+                        animationCol = col;
+
+                        pieceAnimationStart =
+                            SDL_GetTicks();
+
+                        pieceAnimating = 1;
+
+
+                        /* Sound */
+                        playTone(
+                            currentPlayer == 1
+                                ? 650
+                                : 800,
+                            100,
+                            5000
+                        );
+
+
+                        /* Winner */
+                        winner =
+                            checkWinner();
+
+
+                        if (winner != 0)
+                        {
+                            gameOver = 1;
+
+                            winAnimationStart =
+                                SDL_GetTicks();
+
+                            winAnimating = 1;
+                        }
+
+
+                        /* Draw */
+                        else if (boardFull())
+                        {
+                            gameOver = 2;
+
+                            playTone(
+                                300,
+                                300,
+                                5000
+                            );
+                        }
+
+
+                        /* Next player */
+                        else
+                        {
+                            if (currentPlayer == 1)
+                                currentPlayer = 2;
+                            else
+                                currentPlayer = 1;
+                        }
+                    }
+                }
+            }
+        }
+
+
+        /* =================================
+           PIECE ANIMATION
+           ================================= */
+
+        if (pieceAnimating)
+        {
+            Uint32 elapsed =
+                now -
+                pieceAnimationStart;
+
+            if (elapsed >= ANIMATION_TIME)
+            {
+                pieceAnimating = 0;
+
+                if (gameOver == 1)
+                {
+                    playTone(
+                        900,
+                        120,
+                        6000
+                    );
+
+                    playTone(
+                        1200,
+                        180,
+                        6000
+                    );
+                }
+            }
+        }
+
+
+        /* =================================
+           BACKGROUND
+           ================================= */
+
+        SDL_SetRenderDrawColor(
+            renderer,
+            3,
+            5,
+            15,
+            255
+        );
+
+        SDL_RenderClear(renderer);
+
+
+        /* =================================
+           SCREEN BORDER
+           ================================= */
+
+        SDL_SetRenderDrawColor(
+            renderer,
+            0,
+            80,
+            100,
+            255
+        );
+
+        SDL_Rect border =
+        {
+            15,
+            15,
+            screenW - 30,
+            screenH - 30
+        };
+
+        SDL_RenderDrawRect(
+            renderer,
+            &border
+        );
+
+
+        /* =================================
+           TITLE
+           ================================= */
+
+        SDL_SetRenderDrawColor(
+            renderer,
+            X_R,
+            X_G,
+            X_B,
+            255
+        );
+
+
+        int titleSize = CELL / 24;
+
+        if (titleSize < 3)
+            titleSize = 3;
+
+
+        /*
+           Center title
+        */
+
+        int titleWidth =
+            11 * 6 * titleSize;
+
+        int titleX =
+            (screenW - titleWidth) / 2;
+
+
+        drawText(
+            renderer,
+            "TIC TAC TOE",
+            titleX,
+            BOARD_Y - 110,
+            titleSize
+        );
+
+
+        /* =================================
+           BOARD
+           ================================= */
+
+        /* Outer board */
+        SDL_SetRenderDrawColor(
+            renderer,
+            GRID_R,
+            GRID_G,
+            GRID_B,
+            255
+        );
+
+        SDL_Rect boardRect =
+        {
+            BOARD_X,
+            BOARD_Y,
+            BOARD_SIZE,
+            BOARD_SIZE
+        };
+
+        SDL_RenderDrawRect(
+            renderer,
+            &boardRect
+        );
+
+
+        /* Vertical */
+        neonLine(
+            renderer,
+            BOARD_X + CELL,
+            BOARD_Y,
+            BOARD_X + CELL,
+            BOARD_Y + BOARD_SIZE,
+            GRID_R,
+            GRID_G,
+            GRID_B
+        );
+
+        neonLine(
+            renderer,
+            BOARD_X + CELL * 2,
+            BOARD_Y,
+            BOARD_X + CELL * 2,
+            BOARD_Y + BOARD_SIZE,
+            GRID_R,
+            GRID_G,
+            GRID_B
+        );
+
+
+        /* Horizontal */
+        neonLine(
+            renderer,
+            BOARD_X,
+            BOARD_Y + CELL,
+            BOARD_X + BOARD_SIZE,
+            BOARD_Y + CELL,
+            GRID_R,
+            GRID_G,
+            GRID_B
+        );
+
+        neonLine(
+            renderer,
+            BOARD_X,
+            BOARD_Y + CELL * 2,
+            BOARD_X + BOARD_SIZE,
+            BOARD_Y + CELL * 2,
+            GRID_R,
+            GRID_G,
+            GRID_B
+        );
+
+
+        /* =================================
+           X AND O
+           ================================= */
+
+        int r, c;
+
+        for (r = 0; r < 3; r++)
+        {
+            for (c = 0; c < 3; c++)
+            {
+                if (board[r][c] == 0)
+                    continue;
+
+
+                int cx =
+                    BOARD_X +
+                    c * CELL +
+                    CELL / 2;
+
+                int cy =
+                    BOARD_Y +
+                    r * CELL +
+                    CELL / 2;
+
+
+                float progress = 1.0f;
+
+
+                if (r == animationRow &&
+                    c == animationCol &&
+                    pieceAnimating)
+                {
+                    Uint32 elapsed =
+                        now -
+                        pieceAnimationStart;
+
+                    progress =
+                        (float)elapsed /
+                        ANIMATION_TIME;
+
+                    if (progress > 1.0f)
+                        progress = 1.0f;
+                }
+
+
+                if (board[r][c] == 1)
+                {
+                    drawNeonX(
+                        renderer,
+                        cx,
+                        cy,
+                        progress
+                    );
+                }
+                else
+                {
+                    drawNeonO(
+                        renderer,
+                        cx,
+                        cy,
+                        progress
+                    );
+                }
+            }
+        }
+
+
+        /* =================================
+           WINNING LINE
+           ================================= */
+
+        if (gameOver == 1)
+        {
+            float progress = 1.0f;
+
+
+            if (winAnimating)
+            {
+                Uint32 elapsed =
+                    now -
+                    winAnimationStart;
+
+                progress =
+                    (float)elapsed /
+                    WIN_LINE_TIME;
+
+                if (progress >= 1.0f)
+                {
+                    progress = 1.0f;
+                    winAnimating = 0;
+                }
+            }
+
+
+            int x1 =
+                BOARD_X +
+                winC1 * CELL +
+                CELL / 2;
+
+            int y1 =
+                BOARD_Y +
+                winR1 * CELL +
+                CELL / 2;
+
+            int x2 =
+                BOARD_X +
+                winC2 * CELL +
+                CELL / 2;
+
+            int y2 =
+                BOARD_Y +
+                winR2 * CELL +
+                CELL / 2;
+
+
+            int endX =
+                x1 +
+                (int)(
+                    (x2 - x1) *
+                    progress
+                );
+
+            int endY =
+                y1 +
+                (int)(
+                    (y2 - y1) *
+                    progress
+                );
+
+
+            neonLine(
+                renderer,
+                x1,
+                y1,
+                endX,
+                endY,
+                255,
+                50,
+                50
+            );
+        }
+
+
+        /* =================================
+           STATUS TEXT
+           ================================= */
+
+        int statusSize =
+            CELL / 24;
+
+        if (statusSize < 3)
+            statusSize = 3;
+
+
+        if (gameOver == 1)
+        {
+            SDL_SetRenderDrawColor(
+                renderer,
+                255,
+                255,
+                255,
+                255
+            );
+
+            if (winner == 1)
+            {
+                drawText(
+                    renderer,
+                    "X WINS",
+                    screenW / 2 - 3 * 6 * statusSize,
+                    BOARD_Y + BOARD_SIZE + 35,
+                    statusSize
+                );
+            }
+            else
+            {
+                drawText(
+                    renderer,
+                    "O WINS",
+                    screenW / 2 - 3 * 6 * statusSize,
+                    BOARD_Y + BOARD_SIZE + 35,
+                    statusSize
+                );
+            }
+        }
+        else if (gameOver == 2)
+        {
+            SDL_SetRenderDrawColor(
+                renderer,
+                255,
+                255,
+                255,
+                255
+            );
+
+            drawText(
+                renderer,
+                "DRAW",
+                screenW / 2 - 2 * 6 * statusSize,
+                BOARD_Y + BOARD_SIZE + 35,
+                statusSize
+            );
+        }
+        else
+        {
+            SDL_SetRenderDrawColor(
+                renderer,
+                150,
+                150,
+                170,
+                255
+            );
+
+            if (currentPlayer == 1)
+            {
+                drawText(
+                    renderer,
+                    "PLAYER X",
+                    screenW / 2 - 4 * 6 * statusSize,
+                    BOARD_Y + BOARD_SIZE + 35,
+                    statusSize
+                );
+            }
+            else
+            {
+                drawText(
+                    renderer,
+                    "PLAYER O",
+                    screenW / 2 - 4 * 6 * statusSize,
+                    BOARD_Y + BOARD_SIZE + 35,
+                    statusSize
+                );
+            }
+        }
+
+
+        /* =================================
+           RESTART BUTTON
+           ================================= */
+
+        int buttonX =
+            screenW / 2 - CELL;
+
+        int buttonY =
+            BOARD_Y +
+            BOARD_SIZE +
+            150;
+
+        int buttonW =
+            CELL * 2;
+
+        int buttonH =
+            80;
+
+
+        SDL_Rect button =
+        {
+            buttonX,
+            buttonY,
+            buttonW,
+            buttonH
+        };
+
+
+        /* Button background */
+        SDL_SetRenderDrawColor(
+            renderer,
+            8,
+            10,
+            25,
+            255
+        );
+
+        SDL_RenderFillRect(
+            renderer,
+            &button
+        );
+
+
+        /* Button border */
+        SDL_SetRenderDrawColor(
+            renderer,
+            GRID_R,
+            GRID_G,
+            GRID_B,
+            255
+        );
+
+        SDL_RenderDrawRect(
+            renderer,
+            &button
+        );
+
+
+        /* Restart text */
+        SDL_SetRenderDrawColor(
+            renderer,
+            TEXT_R,
+            TEXT_G,
+            TEXT_B,
+            255
+        );
+
+
+        int restartSize =
+            CELL / 25;
+
+        if (restartSize < 3)
+            restartSize = 3;
+
+
+        int restartWidth =
+            7 * 6 * restartSize;
+
+
+        drawText(
+            renderer,
+            "RESTART",
+            screenW / 2 -
+                restartWidth / 2,
+            buttonY + 20,
+            restartSize
+        );
+
+
+        /* =================================
+           DISPLAY
+           ================================= */
+
+        SDL_RenderPresent(renderer);
+
+        SDL_Delay(16);
+    }
+
+
+    /* =====================================
+       CLEANUP
+       ===================================== */
+
+    if (audioDevice != 0)
+    {
+        SDL_ClearQueuedAudio(
+            audioDevice
+        );
+
+        SDL_CloseAudioDevice(
+            audioDevice
+        );
+    }
+
+
+    SDL_DestroyRenderer(renderer);
+
+    SDL_DestroyWindow(window);
+
+    SDL_Quit();
+
+    return 0;
+}
